@@ -1,8 +1,8 @@
 #[derive(Debug)]
 pub struct Schema {
-    kind: String,
-    name: String,
-    table_name: String,
+    pub kind: String,
+    pub name: String,
+    pub table_name: String,
     root_page: u8,
     sql: String,
 }

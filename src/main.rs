@@ -53,6 +53,38 @@ fn main() -> Result<()> {
             // Uncomment this block to pass the first stage
             // println!("number of tables: {}", schemas.len());
         }
+
+        ".tables" => {
+            // Parse page header from database
+            let page_header = PageHeader::parse(&database[100..108])?;
+
+            // Obtain all cell pointers
+            let cell_pointers = database[108..]
+                .chunks_exact(2)
+                .take(page_header.number_of_cells.into())
+                .map(|bytes| u16::from_be_bytes(bytes.try_into().unwrap()));
+
+            // Obtain all records from column 5
+            #[allow(unused_variables)]
+            let schemas = cell_pointers
+                .into_iter()
+                .map(|cell_pointer| {
+                    let stream = &database[cell_pointer as usize..];
+                    let (_, offset) = parse_varint(stream);
+                    let (_rowid, read_bytes) = parse_varint(&stream[offset..]);
+                    parse_record(&stream[offset + read_bytes..], 5)
+                        .map(|record| Schema::parse(record).expect("Invalid record"))
+                })
+                .collect::<Result<Vec<_>>>()?;
+
+            for schema in schemas
+                .into_iter()
+                .filter(|schema| !schema.table_name.starts_with("sqlite"))
+                .filter(|schema| schema.kind == "table")
+            {
+                print!("{} ", schema.name);
+            }
+        }
         _ => bail!("Missing or invalid command passed: {}", command),
     }
 
