@@ -31,8 +31,7 @@ fn main() -> Result<()> {
             let cell_pointers = database[108..]
                 .chunks_exact(2)
                 .take(page_header.number_of_cells.into())
-                .map(|bytes| u16::from_be_bytes(bytes.try_into().unwrap()))
-                .collect::<Vec<_>>();
+                .map(|bytes| u16::from_be_bytes(bytes.try_into().unwrap()));
 
             // Obtain all records from column 5
             #[allow(unused_variables)]
@@ -48,7 +47,8 @@ fn main() -> Result<()> {
                 .collect::<Result<Vec<_>>>()?;
 
             // You can use print statements as follows for debugging, they'll be visible when running tests.
-            println!("Logs from your program will appear here!");
+
+            print!("number of tables: {}", schemas.len());
 
             // Uncomment this block to pass the first stage
             // println!("number of tables: {}", schemas.len());
