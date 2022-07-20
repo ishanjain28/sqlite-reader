@@ -3,7 +3,7 @@ pub struct Schema {
     pub kind: String,
     pub name: String,
     pub table_name: String,
-    root_page: u8,
+    pub root_page: u8,
     sql: String,
 }
 
