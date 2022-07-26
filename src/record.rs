@@ -31,10 +31,13 @@ fn parse_column_value(stream: &[u8], serial_type: usize) -> Result<Vec<u8>> {
         // 8 bit twos-complement integer
         1 => vec![stream[0]],
         // Text encoding
+        n if serial_type >= 12 && serial_type % 2 == 0 => {
+            let n_bytes = (n - 12) / 2;
+            stream[0..n_bytes as usize].to_vec()
+        }
         n if serial_type >= 13 && serial_type % 2 == 1 => {
             let n_bytes = (n - 13) / 2;
-            let bytes = stream[0..n_bytes as usize].to_vec();
-            bytes
+            stream[0..n_bytes as usize].to_vec()
         }
         _ => bail!("Invalid serial_type: {}", serial_type),
     };

@@ -4,7 +4,7 @@ pub struct Schema {
     pub name: String,
     pub table_name: String,
     pub root_page: u8,
-    sql: String,
+    pub sql: String,
 }
 
 impl Schema {
