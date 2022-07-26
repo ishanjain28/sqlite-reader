@@ -102,6 +102,9 @@ fn read_columns(query: &str, db_header: DBHeader, database: &[u8]) -> Result<(),
     let (columns, table) = read_column_and_table(query);
     // Assume it's valid SQL
 
+    println!("{:?}", columns);
+    println!("{:?}", db_header);
+
     let schema = db_header
         .schemas
         .into_iter()
@@ -109,6 +112,8 @@ fn read_columns(query: &str, db_header: DBHeader, database: &[u8]) -> Result<(),
         .unwrap();
 
     let column_map = find_column_positions(&schema.sql);
+
+    println!("column map = {:?}", column_map);
 
     let table_page_offset = db_header.page_size as usize * (schema.root_page as usize - 1);
     let page_header =
@@ -136,6 +141,7 @@ fn read_columns(query: &str, db_header: DBHeader, database: &[u8]) -> Result<(),
     Ok(())
 }
 
+#[derive(Debug)]
 struct DBHeader {
     page_size: u16,
     schemas: Vec<Schema>,
