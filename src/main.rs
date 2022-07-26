@@ -102,9 +102,6 @@ fn read_columns(query: &str, db_header: DBHeader, database: &[u8]) -> Result<(),
     let (columns, table) = read_column_and_table(query);
     // Assume it's valid SQL
 
-    println!("{:?}", columns);
-    println!("{:?}", db_header);
-
     let schema = db_header
         .schemas
         .into_iter()
@@ -112,8 +109,6 @@ fn read_columns(query: &str, db_header: DBHeader, database: &[u8]) -> Result<(),
         .unwrap();
 
     let column_map = find_column_positions(&schema.sql);
-
-    println!("column map = {:?}", column_map);
 
     let table_page_offset = db_header.page_size as usize * (schema.root_page as usize - 1);
     let page_header =
@@ -129,7 +124,7 @@ fn read_columns(query: &str, db_header: DBHeader, database: &[u8]) -> Result<(),
         let (_, offset) = parse_varint(stream);
         let (_, read_bytes) = parse_varint(&stream[offset..]);
 
-        parse_record(&stream[offset + read_bytes..], 3).unwrap()
+        parse_record(&stream[offset + read_bytes..], column_map.len()).unwrap()
     });
 
     for row in rows {
