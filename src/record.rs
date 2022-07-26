@@ -28,6 +28,7 @@ pub fn parse_record(stream: &[u8], column_count: usize) -> Result<Vec<Vec<u8>>> 
 
 fn parse_column_value(stream: &[u8], serial_type: usize) -> Result<Vec<u8>> {
     let column_value = match serial_type {
+        0 => vec![],
         // 8 bit twos-complement integer
         1 => vec![stream[0]],
         // Text encoding

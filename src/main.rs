@@ -89,8 +89,7 @@ fn main() -> Result<()> {
 
         v => {
             let db_header = read_db_header(&database)?;
-
-            if v.contains("count(*)") {
+            if v.to_lowercase().contains("count(*)") {
                 count_rows_in_table(v, db_header, &database)
             } else {
                 read_columns(v, db_header, &database)
@@ -125,11 +124,11 @@ fn read_columns(query: &str, db_header: DBHeader, database: &[u8]) -> Result<(),
         let (_, offset) = parse_varint(stream);
         let (_, read_bytes) = parse_varint(&stream[offset..]);
 
-        parse_record(&stream[offset + read_bytes + 1..], 2).unwrap()
+        parse_record(&stream[offset + read_bytes..], 3).unwrap()
     });
 
     for row in rows {
-        let cpos = *column_map.get(&columns[0]).unwrap() - 1;
+        let cpos = *column_map.get(&columns[0]).unwrap();
 
         println!("{}", String::from_utf8_lossy(&row[cpos]));
     }
