@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use anyhow::{bail, Error, Result};
 use sqlite_starter_rust::{
     header::PageHeader, record::parse_record, schema::Schema, varint::parse_varint,
 };
@@ -51,8 +51,7 @@ fn main() -> Result<()> {
 
             print!("number of tables: {}", schemas.len());
 
-            // Uncomment this block to pass the first stage
-            // println!("number of tables: {}", schemas.len());
+            Ok(())
         }
 
         ".tables" => {
@@ -85,69 +84,111 @@ fn main() -> Result<()> {
             {
                 print!("{} ", schema.name);
             }
+            Ok(())
         }
 
         v => {
-            let (columns, table) = read_column_and_table(v);
-            // Assume it's valid SQL
+            let db_header = read_db_header(&database)?;
 
-            let db_page_size = u16::from_be_bytes([database[16], database[17]]);
-
-            // Parse page header from database
-            let page_header = PageHeader::parse(&database[100..108])?;
-
-            // Obtain all cell pointers
-            let cell_pointers = database[108..]
-                .chunks_exact(2)
-                .take(page_header.number_of_cells.into())
-                .map(|bytes| u16::from_be_bytes(bytes.try_into().unwrap()));
-
-            // Obtain all records from column 5
-            #[allow(unused_variables)]
-            let schemas = cell_pointers.into_iter().map(|cell_pointer| {
-                let stream = &database[cell_pointer as usize..];
-                let (_, offset) = parse_varint(stream);
-                let (rowid, read_bytes) = parse_varint(&stream[offset..]);
-
-                parse_record(&stream[offset + read_bytes..], 5)
-                    .map(|record| Schema::parse(record).expect("Invalid record"))
-            });
-
-            let schema = schemas
-                .into_iter()
-                .flatten()
-                .find(|schema| schema.table_name == table)
-                .unwrap();
-
-            let column_map = find_column_positions(&schema.sql);
-
-            let table_page_offset = db_page_size as usize * (schema.root_page as usize - 1);
-            let page_header =
-                PageHeader::parse(&database[table_page_offset..table_page_offset + 8]).unwrap();
-
-            let cell_pointers = database[table_page_offset + 8..]
-                .chunks_exact(2)
-                .take(page_header.number_of_cells.into())
-                .map(|bytes| u16::from_be_bytes(bytes.try_into().unwrap()));
-
-            let rows = cell_pointers.into_iter().map(|cp| {
-                let stream = &database[table_page_offset + cp as usize..];
-                let (_, offset) = parse_varint(stream);
-                let (_, read_bytes) = parse_varint(&stream[offset..]);
-
-                parse_record(&stream[offset + read_bytes + 1..], 2).unwrap()
-            });
-
-            for row in rows {
-                let cpos = *column_map.get(&columns[0]).unwrap() - 1;
-
-                println!("{}", String::from_utf8_lossy(&row[cpos]));
+            if v.contains("count(*)") {
+                count_rows_in_table(v, db_header, &database)
+            } else {
+                read_columns(v, db_header, &database)
             }
         }
     }
+}
+
+fn read_columns(query: &str, db_header: DBHeader, database: &[u8]) -> Result<(), Error> {
+    let (columns, table) = read_column_and_table(query);
+    // Assume it's valid SQL
+
+    let schema = db_header
+        .schemas
+        .into_iter()
+        .find(|schema| schema.table_name == table)
+        .unwrap();
+
+    let column_map = find_column_positions(&schema.sql);
+
+    let table_page_offset = db_header.page_size as usize * (schema.root_page as usize - 1);
+    let page_header =
+        PageHeader::parse(&database[table_page_offset..table_page_offset + 8]).unwrap();
+
+    let cell_pointers = database[table_page_offset + 8..]
+        .chunks_exact(2)
+        .take(page_header.number_of_cells.into())
+        .map(|bytes| u16::from_be_bytes(bytes.try_into().unwrap()));
+
+    let rows = cell_pointers.into_iter().map(|cp| {
+        let stream = &database[table_page_offset + cp as usize..];
+        let (_, offset) = parse_varint(stream);
+        let (_, read_bytes) = parse_varint(&stream[offset..]);
+
+        parse_record(&stream[offset + read_bytes + 1..], 2).unwrap()
+    });
+
+    for row in rows {
+        let cpos = *column_map.get(&columns[0]).unwrap() - 1;
+
+        println!("{}", String::from_utf8_lossy(&row[cpos]));
+    }
+
     Ok(())
 }
 
+struct DBHeader {
+    page_size: u16,
+    schemas: Vec<Schema>,
+}
+
+fn read_db_header(database: &[u8]) -> Result<DBHeader, Error> {
+    let db_page_size = u16::from_be_bytes([database[16], database[17]]);
+    // Parse page header from database
+    let page_header = PageHeader::parse(&database[100..108])?;
+
+    // Obtain all cell pointers
+    let cell_pointers = database[108..]
+        .chunks_exact(2)
+        .take(page_header.number_of_cells.into())
+        .map(|bytes| u16::from_be_bytes(bytes.try_into().unwrap()));
+
+    // Obtain all records from column 5
+    #[allow(unused_variables)]
+    let schemas = cell_pointers.into_iter().map(|cell_pointer| {
+        let stream = &database[cell_pointer as usize..];
+        let (_, offset) = parse_varint(stream);
+        let (rowid, read_bytes) = parse_varint(&stream[offset..]);
+
+        parse_record(&stream[offset + read_bytes..], 5)
+            .map(|record| Schema::parse(record).expect("Invalid record"))
+            .unwrap()
+    });
+
+    Ok(DBHeader {
+        page_size: db_page_size,
+        schemas: schemas.collect(),
+    })
+}
+
+fn count_rows_in_table(query: &str, db_header: DBHeader, database: &[u8]) -> Result<(), Error> {
+    let (_, table) = read_column_and_table(query);
+    // Assume it's valid SQL
+
+    let schema = db_header
+        .schemas
+        .into_iter()
+        .find(|schema| schema.table_name == table)
+        .unwrap();
+
+    let table_page_offset = db_header.page_size as usize * (schema.root_page as usize - 1);
+    let page_header =
+        PageHeader::parse(&database[table_page_offset..table_page_offset + 8]).unwrap();
+
+    println!("{}", page_header.number_of_cells);
+
+    Ok(())
+}
 fn find_column_positions(schema: &str) -> HashMap<&str, usize> {
     let schema = schema.trim_start_matches(|c| c != '(');
     let schema = schema
