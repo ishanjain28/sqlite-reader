@@ -1,4 +1,6 @@
 use anyhow::{bail, Error, Result};
+use once_cell::sync::Lazy;
+use regex::{Regex, RegexBuilder};
 use sqlite_starter_rust::{
     header::PageHeader, record::parse_record, schema::Schema, varint::parse_varint,
 };
@@ -6,6 +8,15 @@ use std::collections::HashMap;
 use std::convert::TryInto;
 use std::fs::File;
 use std::io::prelude::*;
+
+const QUERY_REGEX: Lazy<Regex> = Lazy::new(|| {
+    let regex = "select ([a-zA-Z0-9*].*) FROM ([a-zA-Z0-9].*)";
+
+    RegexBuilder::new(regex)
+        .case_insensitive(true)
+        .build()
+        .expect("error in compiling regex")
+});
 
 fn main() -> Result<()> {
     // Parse arguments
@@ -128,9 +139,19 @@ fn read_columns(query: &str, db_header: DBHeader, database: &[u8]) -> Result<(),
     });
 
     for row in rows {
-        let cpos = *column_map.get(&columns[0]).unwrap();
+        let mut output = String::new();
 
-        println!("{}", String::from_utf8_lossy(&row[cpos]));
+        for column in columns.iter() {
+            let cpos = *column_map.get(column).unwrap();
+            let s = String::from_utf8_lossy(&row[cpos]);
+
+            output.push_str(&s);
+            output.push('|');
+        }
+
+        let output = output.trim_end_matches(|c| c == '|');
+
+        println!("{}", output);
     }
 
     Ok(())
@@ -189,6 +210,7 @@ fn count_rows_in_table(query: &str, db_header: DBHeader, database: &[u8]) -> Res
 
     Ok(())
 }
+
 fn find_column_positions(schema: &str) -> HashMap<&str, usize> {
     let schema = schema.trim_start_matches(|c| c != '(');
     let schema = schema
@@ -205,16 +227,16 @@ fn find_column_positions(schema: &str) -> HashMap<&str, usize> {
 }
 
 fn read_column_and_table(query: &str) -> (Vec<&str>, &str) {
-    let mut query = query.split(' ');
-    query.next();
-    let column = query.next().unwrap();
-    let column = column
+    let matches = QUERY_REGEX.captures(query).unwrap();
+
+    let columns = matches.get(1).unwrap().as_str();
+    let table = matches.get(2).unwrap().as_str();
+
+    let column = columns
         .split(',')
         .filter(|c| !c.is_empty())
         .map(|c| c.trim())
         .collect();
-    query.next();
-    let table = query.next().unwrap();
 
     (column, table)
 }
