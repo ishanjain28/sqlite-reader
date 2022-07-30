@@ -123,11 +123,10 @@ fn main() -> Result<()> {
 
 fn parse_page<'a>(
     database: &'a [u8],
+    db_header: &'a DBHeader,
     column_map: &'a HashMap<&str, usize>,
-    page_size: usize,
-    page_num: usize,
+    table_page_offset: usize,
 ) -> Option<Box<dyn Iterator<Item = (usize, Vec<ColumnValue<'a>>)> + 'a>> {
-    let table_page_offset = page_size * (page_num - 1);
     let (read, page_header) =
         PageHeader::parse(&database[table_page_offset..table_page_offset + 12]).unwrap();
 
@@ -148,12 +147,31 @@ fn parse_page<'a>(
 
                     let (_rowid, _offset) = parse_varint(&stream[4..]);
 
-                    parse_page(database, column_map, page_size, left_child_id as usize)
+                    parse_page(
+                        database,
+                        db_header,
+                        column_map,
+                        db_header.page_size as usize * (left_child_id as usize - 1),
+                    )
                 })
                 .flatten()
                 .flatten();
 
-            Some(Box::new(rows))
+            if let Some(rp) = page_header.right_most_pointer {
+                Some(Box::new(
+                    rows.chain(
+                        parse_page(
+                            database,
+                            db_header,
+                            column_map,
+                            db_header.page_size as usize * (rp as usize - 1),
+                        )
+                        .unwrap(),
+                    ),
+                ))
+            } else {
+                Some(Box::new(rows))
+            }
         }
         BTreePage::LeafIndex => todo!(),
         BTreePage::LeafTable => {
@@ -190,9 +208,9 @@ fn read_columns(query: &str, db_header: DBHeader, database: &[u8]) -> Result<(),
 
     let rows = parse_page(
         database,
+        &db_header,
         &column_map,
-        db_header.page_size as usize,
-        schema.root_page as usize,
+        db_header.page_size as usize * (schema.root_page as usize - 1),
     );
 
     for (rowid, row) in rows.unwrap() {
