@@ -140,7 +140,7 @@ fn parse_page<'a>(
         BTreePage::InteriorTable => {
             let rows = cell_pointers
                 .into_iter()
-                .map(move |cp| {
+                .filter_map(move |cp| {
                     let stream = &database[table_page_offset + cp as usize..];
                     let left_child_id =
                         u32::from_be_bytes([stream[0], stream[1], stream[2], stream[3]]);
@@ -154,7 +154,6 @@ fn parse_page<'a>(
                         db_header.page_size as usize * (left_child_id as usize - 1),
                     )
                 })
-                .flatten()
                 .flatten();
 
             if let Some(rp) = page_header.right_most_pointer {
