@@ -1,3 +1,5 @@
+use crate::record::ColumnValue;
+
 #[derive(Debug)]
 pub struct Schema {
     pub kind: String,
@@ -9,20 +11,20 @@ pub struct Schema {
 
 impl Schema {
     /// Parses a record into a schema
-    pub fn parse(record: Vec<Vec<u8>>) -> Option<Self> {
+    pub fn parse(record: Vec<ColumnValue>) -> Option<Self> {
         let mut items = record.into_iter();
-        let kind = items.next()?;
-        let name = items.next()?;
-        let table_name = items.next()?;
-        let root_page = *items.next()?.get(0)?;
-        let sql = items.next()?;
+        let kind = items.next()?.read_string();
+        let name = items.next()?.read_string();
+        let table_name = items.next()?.read_string();
+        let root_page = items.next()?.read_u8();
+        let sql = items.next()?.read_string();
 
         let schema = Self {
-            kind: String::from_utf8_lossy(&kind).to_string(),
-            name: String::from_utf8_lossy(&name).to_string(),
-            table_name: String::from_utf8_lossy(&table_name).to_string(),
+            kind,
+            name,
+            table_name,
             root_page,
-            sql: String::from_utf8_lossy(&sql).to_string(),
+            sql,
         };
         Some(schema)
     }

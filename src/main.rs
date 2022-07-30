@@ -1,6 +1,8 @@
 use anyhow::{bail, Error, Result};
 use once_cell::sync::Lazy;
 use regex::{Regex, RegexBuilder};
+use sqlite_starter_rust::header::BTreePage;
+use sqlite_starter_rust::record::ColumnValue;
 use sqlite_starter_rust::{
     header::PageHeader, record::parse_record, schema::Schema, varint::parse_varint,
 };
@@ -47,7 +49,7 @@ fn main() -> Result<()> {
     match command.as_str() {
         ".dbinfo" => {
             // Parse page header from database
-            let page_header = PageHeader::parse(&database[100..108])?;
+            let (_, page_header) = PageHeader::parse(&database[100..108])?;
 
             // Obtain all cell pointers
             let cell_pointers = database[108..]
@@ -77,7 +79,7 @@ fn main() -> Result<()> {
 
         ".tables" => {
             // Parse page header from database
-            let page_header = PageHeader::parse(&database[100..108])?;
+            let (_, page_header) = PageHeader::parse(&database[100..108])?;
 
             // Obtain all cell pointers
             let cell_pointers = database[108..]
@@ -119,53 +121,100 @@ fn main() -> Result<()> {
     }
 }
 
+fn parse_page<'a>(
+    database: &'a [u8],
+    column_map: &'a HashMap<&str, usize>,
+    page_size: usize,
+    page_num: usize,
+) -> Option<Box<dyn Iterator<Item = (usize, Vec<ColumnValue<'a>>)> + 'a>> {
+    let table_page_offset = page_size * (page_num - 1);
+    let (read, page_header) =
+        PageHeader::parse(&database[table_page_offset..table_page_offset + 12]).unwrap();
+
+    let cell_pointers = database[table_page_offset + read..]
+        .chunks_exact(2)
+        .take(page_header.number_of_cells.into())
+        .map(|bytes| u16::from_be_bytes(bytes.try_into().unwrap()));
+
+    match page_header.page_type {
+        BTreePage::InteriorIndex => todo!(),
+        BTreePage::InteriorTable => {
+            let rows = cell_pointers
+                .into_iter()
+                .map(move |cp| {
+                    let stream = &database[table_page_offset + cp as usize..];
+                    let left_child_id =
+                        u32::from_be_bytes([stream[0], stream[1], stream[2], stream[3]]);
+
+                    let (_rowid, _offset) = parse_varint(&stream[4..]);
+
+                    parse_page(database, column_map, page_size, left_child_id as usize)
+                })
+                .flatten()
+                .flatten();
+
+            Some(Box::new(rows))
+        }
+        BTreePage::LeafIndex => todo!(),
+        BTreePage::LeafTable => {
+            let rows = cell_pointers.into_iter().map(move |cp| {
+                let stream = &database[table_page_offset + cp as usize..];
+                let (total, offset) = parse_varint(stream);
+                let (rowid, read_bytes) = parse_varint(&stream[offset..]);
+
+                (
+                    rowid,
+                    parse_record(
+                        &stream[offset + read_bytes..offset + read_bytes + total as usize],
+                        column_map.len(),
+                    )
+                    .unwrap(),
+                )
+            });
+
+            Some(Box::new(rows))
+        }
+    }
+}
+
 fn read_columns(query: &str, db_header: DBHeader, database: &[u8]) -> Result<(), Error> {
     let (columns, table, where_clause) = read_column_and_table(query);
     // Assume it's valid SQL
-
     let schema = db_header
         .schemas
-        .into_iter()
+        .iter()
         .find(|schema| schema.table_name == table)
         .unwrap();
 
     let column_map = find_column_positions(&schema.sql);
 
-    let table_page_offset = db_header.page_size as usize * (schema.root_page as usize - 1);
-    let page_header =
-        PageHeader::parse(&database[table_page_offset..table_page_offset + 8]).unwrap();
+    let rows = parse_page(
+        database,
+        &column_map,
+        db_header.page_size as usize,
+        schema.root_page as usize,
+    );
 
-    let cell_pointers = database[table_page_offset + 8..]
-        .chunks_exact(2)
-        .take(page_header.number_of_cells.into())
-        .map(|bytes| u16::from_be_bytes(bytes.try_into().unwrap()));
-
-    let rows = cell_pointers.into_iter().map(|cp| {
-        let stream = &database[table_page_offset + cp as usize..];
-        let (_, offset) = parse_varint(stream);
-        let (_, read_bytes) = parse_varint(&stream[offset..]);
-
-        parse_record(&stream[offset + read_bytes..], column_map.len()).unwrap()
-    });
-
-    for row in rows {
+    for (rowid, row) in rows.unwrap() {
         let mut output = String::new();
 
         if let Some(wc) = where_clause {
             let colidx = *column_map.get(wc.0).unwrap();
 
-            let row_pol = String::from_utf8_lossy(&row[colidx]);
+            let row_pol = row[colidx].read_string();
 
             if row_pol != wc.1 {
                 continue;
             }
         }
 
-        for column in columns.iter() {
-            let cpos = *column_map.get(column).unwrap();
-            let s = String::from_utf8_lossy(&row[cpos]);
-
-            output.push_str(&s);
+        for &column in columns.iter() {
+            if column == "id" {
+                output.push_str(&rowid.to_string());
+            } else {
+                let cpos = *column_map.get(column).unwrap();
+                output.push_str(&row[cpos].to_string());
+            }
             output.push('|');
         }
 
@@ -186,7 +235,7 @@ struct DBHeader {
 fn read_db_header(database: &[u8]) -> Result<DBHeader, Error> {
     let db_page_size = u16::from_be_bytes([database[16], database[17]]);
     // Parse page header from database
-    let page_header = PageHeader::parse(&database[100..108])?;
+    let (_, page_header) = PageHeader::parse(&database[100..108])?;
 
     // Obtain all cell pointers
     let cell_pointers = database[108..]
@@ -223,7 +272,7 @@ fn count_rows_in_table(query: &str, db_header: DBHeader, database: &[u8]) -> Res
         .unwrap();
 
     let table_page_offset = db_header.page_size as usize * (schema.root_page as usize - 1);
-    let page_header =
+    let (_, page_header) =
         PageHeader::parse(&database[table_page_offset..table_page_offset + 8]).unwrap();
 
     println!("{}", page_header.number_of_cells);
