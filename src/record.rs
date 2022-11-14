@@ -62,12 +62,13 @@ impl<'a> ColumnValue<'a> {
         }
     }
 
-    pub fn read_u8(&self) -> u8 {
-        if let ColumnValue::U8(v) = self {
-            *v
-        } else {
-            println!("{:?}", self);
-            unreachable!()
+    pub fn read_u32(&self) -> u32 {
+        match self {
+            ColumnValue::U8(v) => *v as u32,
+            ColumnValue::U16(v) => *v as u32,
+            ColumnValue::U24(v) => *v as u32,
+            ColumnValue::U32(v) => *v as u32,
+            _ => unreachable!(),
         }
     }
 

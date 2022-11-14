@@ -5,7 +5,7 @@ pub struct Schema {
     pub kind: String,
     pub name: String,
     pub table_name: String,
-    pub root_page: u8,
+    pub root_page: u32,
     pub sql: String,
 }
 
@@ -16,7 +16,7 @@ impl Schema {
         let kind = items.next()?.to_string();
         let name = items.next()?.to_string();
         let table_name = items.next()?.to_string();
-        let root_page = items.next()?.read_u8();
+        let root_page = items.next()?.read_u32();
         let sql = items.next()?.to_string();
 
         let schema = Self {
