@@ -276,8 +276,6 @@ fn parse_page<'a>(
                     let record = parse_record(&stream[offset + 4..offset + 4 + payload_size], 2);
                     let record = record.unwrap();
 
-                    println!("{:?}", record);
-
                     Some(
                         parse_page(
                             database,
