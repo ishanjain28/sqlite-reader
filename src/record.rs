@@ -68,6 +68,8 @@ impl<'a> ColumnValue<'a> {
             ColumnValue::U16(v) => *v as u32,
             ColumnValue::U24(v) => *v as u32,
             ColumnValue::U32(v) => *v as u32,
+            ColumnValue::True => 1,
+            ColumnValue::False => 0,
             v => {
                 println!("{:?}", v);
 
@@ -84,6 +86,8 @@ impl<'a> ColumnValue<'a> {
             ColumnValue::U32(v) => *v as usize,
             ColumnValue::U48(v) => *v as usize,
             ColumnValue::U64(v) => *v as usize,
+            ColumnValue::True => 1,
+            ColumnValue::False => 0,
             v => {
                 println!("{:?}", v);
 
