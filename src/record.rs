@@ -66,6 +66,7 @@ impl<'a> ColumnValue<'a> {
         if let ColumnValue::U8(v) = self {
             *v
         } else {
+            println!("{:?}", self);
             unreachable!()
         }
     }
