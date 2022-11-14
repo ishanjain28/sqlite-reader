@@ -34,8 +34,8 @@ impl PageHeader {
         let start_of_content_area = u16::from_be_bytes(stream[5..7].try_into()?);
         let fragmented_free_bytes = stream[7];
 
-        if page_type == BTreePage::InteriorTable {
-            Ok((
+        match page_type {
+            BTreePage::InteriorIndex | BTreePage::InteriorTable => Ok((
                 12,
                 PageHeader {
                     page_type,
@@ -47,9 +47,9 @@ impl PageHeader {
                         stream[8], stream[9], stream[10], stream[11],
                     ])),
                 },
-            ))
-        } else {
-            Ok((
+            )),
+
+            BTreePage::LeafIndex | BTreePage::LeafTable => Ok((
                 8,
                 PageHeader {
                     page_type,
@@ -59,7 +59,7 @@ impl PageHeader {
                     fragmented_free_bytes,
                     right_most_pointer: None,
                 },
-            ))
+            )),
         }
     }
 }

@@ -1,13 +1,12 @@
-use std::fmt::Display;
-
 use crate::varint::parse_varint;
 use anyhow::{bail, Result};
+use std::fmt::Display;
 
 /// Reads SQLite's "Record Format" as mentioned here:
 /// [record_format](https://www.sqlite.org/fileformat.html#record_format)
 pub fn parse_record(stream: &[u8], column_count: usize) -> Result<Vec<ColumnValue>> {
     // Parse number of bytes in header, and use bytes_read as offset
-    let (_, mut offset) = parse_varint(stream);
+    let (header_size, mut offset) = parse_varint(stream);
 
     // Read each varint into serial types and modify the offset
     let mut serial_types = vec![];
@@ -17,6 +16,7 @@ pub fn parse_record(stream: &[u8], column_count: usize) -> Result<Vec<ColumnValu
         serial_types.push(varint);
     }
 
+    offset = header_size;
     // Parse each serial type as column into record and modify the offset
     let mut record = vec![];
     for serial_type in serial_types {
@@ -28,7 +28,7 @@ pub fn parse_record(stream: &[u8], column_count: usize) -> Result<Vec<ColumnValu
     Ok(record)
 }
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub enum ColumnValue<'a> {
     Null,
     U8(u8),
@@ -41,7 +41,7 @@ pub enum ColumnValue<'a> {
     False,
     True,
     Blob(&'a [u8]),
-    Text(String),
+    Text(&'a [u8]),
 }
 
 impl<'a> ColumnValue<'a> {
@@ -62,19 +62,23 @@ impl<'a> ColumnValue<'a> {
         }
     }
 
-    pub fn read_string(&self) -> String {
-        match self {
-            ColumnValue::Text(v) => v.clone(),
-            ColumnValue::Null => String::new(),
-            _ => unreachable!(),
-        }
-    }
-
     pub fn read_u8(&self) -> u8 {
         if let ColumnValue::U8(v) = self {
             *v
         } else {
             unreachable!()
+        }
+    }
+
+    pub fn read_usize(&self) -> usize {
+        match self {
+            ColumnValue::U8(v) => *v as usize,
+            ColumnValue::U16(v) => *v as usize,
+            ColumnValue::U24(v) => *v as usize,
+            ColumnValue::U32(v) => *v as usize,
+            ColumnValue::U48(v) => *v as usize,
+            ColumnValue::U64(v) => *v as usize,
+            _ => unreachable!(),
         }
     }
 }
@@ -93,7 +97,7 @@ impl<'a> Display for ColumnValue<'a> {
             ColumnValue::False => f.write_str("false"),
             ColumnValue::True => f.write_str("true"),
             ColumnValue::Blob(v) => f.write_fmt(format_args!("{:?}", v)),
-            ColumnValue::Text(v) => f.write_str(v),
+            ColumnValue::Text(v) => f.write_str(&String::from_utf8(v.to_vec()).unwrap()),
         }
     }
 }
@@ -103,28 +107,13 @@ fn parse_column_value(stream: &[u8], serial_type: usize) -> Result<ColumnValue> 
         0 => ColumnValue::Null,
         // 8 bit twos-complement integer
         1 => ColumnValue::U8(stream[0]),
-        2 => {
-            let value = (!(stream[0] as u16) << 8) + !stream[1] as u16 + 1;
+        2 => ColumnValue::U16(u16::from_be_bytes([stream[0], stream[1]])),
 
-            ColumnValue::U16(value)
-        }
+        3 => ColumnValue::U24(u32::from_be_bytes([0, stream[0], stream[1], stream[2]])),
 
-        3 => {
-            let value =
-                (!(stream[0] as u32) << 16) + (!(stream[1] as u32) << 8) + !stream[2] as u32 + 1;
-
-            ColumnValue::U24(value)
-        }
-
-        4 => {
-            let value = (!(stream[0] as u32) << 24)
-                + (!(stream[0] as u32) << 16)
-                + (!(stream[1] as u32) << 8)
-                + !stream[2] as u32
-                + 1;
-
-            ColumnValue::U32(value)
-        }
+        4 => ColumnValue::U32(u32::from_be_bytes([
+            stream[0], stream[1], stream[2], stream[3],
+        ])),
 
         8 => ColumnValue::False,
         9 => ColumnValue::True,
@@ -138,9 +127,7 @@ fn parse_column_value(stream: &[u8], serial_type: usize) -> Result<ColumnValue> 
             let n_bytes = (n - 13) / 2;
             let a = &stream[0..n_bytes as usize];
 
-            let s = String::from_utf8_lossy(a);
-
-            ColumnValue::Text(s.to_string())
+            ColumnValue::Text(a)
         }
         _ => bail!("Invalid serial_type: {}", serial_type),
     })

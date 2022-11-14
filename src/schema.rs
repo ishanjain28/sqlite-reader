@@ -13,11 +13,11 @@ impl Schema {
     /// Parses a record into a schema
     pub fn parse(record: Vec<ColumnValue>) -> Option<Self> {
         let mut items = record.into_iter();
-        let kind = items.next()?.read_string();
-        let name = items.next()?.read_string();
-        let table_name = items.next()?.read_string();
+        let kind = items.next()?.to_string();
+        let name = items.next()?.to_string();
+        let table_name = items.next()?.to_string();
         let root_page = items.next()?.read_u8();
-        let sql = items.next()?.read_string();
+        let sql = items.next()?.to_string();
 
         let schema = Self {
             kind,

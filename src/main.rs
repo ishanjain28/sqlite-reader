@@ -6,7 +6,7 @@ use sqlite_starter_rust::record::ColumnValue;
 use sqlite_starter_rust::{
     header::PageHeader, record::parse_record, schema::Schema, varint::parse_varint,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::convert::TryInto;
 use std::fs::File;
 use std::io::prelude::*;
@@ -46,7 +46,7 @@ fn main() -> Result<()> {
 
     // Parse command and act accordingly
     let command = &args[2];
-    match command.as_str() {
+    match command.as_str().trim() {
         ".dbinfo" => {
             // Parse page header from database
             let (_, page_header) = PageHeader::parse(&database[100..108])?;
@@ -58,7 +58,6 @@ fn main() -> Result<()> {
                 .map(|bytes| u16::from_be_bytes(bytes.try_into().unwrap()));
 
             // Obtain all records from column 5
-            #[allow(unused_variables)]
             let schemas = cell_pointers
                 .into_iter()
                 .map(|cell_pointer| {
@@ -88,7 +87,6 @@ fn main() -> Result<()> {
                 .map(|bytes| u16::from_be_bytes(bytes.try_into().unwrap()));
 
             // Obtain all records from column 5
-            #[allow(unused_variables)]
             let schemas = cell_pointers
                 .into_iter()
                 .map(|cell_pointer| {
@@ -110,6 +108,15 @@ fn main() -> Result<()> {
             Ok(())
         }
 
+        v if v.contains("companies") => {
+            let db_header = read_db_header(&database)?;
+
+            // Traverse the index
+            read_index(&database, v, &db_header);
+
+            Ok(())
+        }
+
         v => {
             let db_header = read_db_header(&database)?;
             if v.to_lowercase().contains("count(*)") {
@@ -118,6 +125,70 @@ fn main() -> Result<()> {
                 read_columns(v, db_header, &database)
             }
         }
+    }
+}
+
+fn read_index(database: &[u8], query: &str, db_header: &DBHeader) {
+    let (columns, table, where_clause) = read_column_and_table(query);
+
+    let schema = db_header
+        .schemas
+        .iter()
+        .find(|schema| schema.table_name == table)
+        .unwrap();
+
+    let column_map = find_column_positions(&schema.sql);
+
+    // Assume it's valid SQL
+    let index_schema = db_header
+        .schemas
+        .iter()
+        .find(|schema| schema.name == "idx_companies_country")
+        .unwrap();
+
+    let rows = parse_page(
+        database,
+        &db_header,
+        &column_map,
+        db_header.page_size as usize * (index_schema.root_page as usize - 1),
+    );
+
+    let rowids: HashSet<usize> = rows
+        .unwrap()
+        .filter_map(|(rowid, row)| {
+            if row[0].to_string() == where_clause.unwrap().1 {
+                Some(rowid)
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    let rows = parse_page(
+        database,
+        &db_header,
+        &column_map,
+        db_header.page_size as usize * (schema.root_page as usize - 1),
+    )
+    .unwrap()
+    .filter(|(rowid, _)| rowids.contains(rowid));
+
+    for (rowid, row) in rows {
+        let mut output = String::new();
+
+        for &column in columns.iter() {
+            if column == "id" {
+                output.push_str(&rowid.to_string());
+            } else {
+                let cpos = *column_map.get(column).unwrap();
+                output.push_str(&row[cpos].to_string());
+            }
+            output.push('|');
+        }
+
+        let output = output.trim_end_matches(|c| c == '|');
+
+        println!("{}", output);
     }
 }
 
@@ -136,7 +207,6 @@ fn parse_page<'a>(
         .map(|bytes| u16::from_be_bytes(bytes.try_into().unwrap()));
 
     match page_header.page_type {
-        BTreePage::InteriorIndex => todo!(),
         BTreePage::InteriorTable => {
             let rows = cell_pointers
                 .into_iter()
@@ -172,7 +242,6 @@ fn parse_page<'a>(
                 Some(Box::new(rows))
             }
         }
-        BTreePage::LeafIndex => todo!(),
         BTreePage::LeafTable => {
             let rows = cell_pointers.into_iter().map(move |cp| {
                 let stream = &database[table_page_offset + cp as usize..];
@@ -191,9 +260,82 @@ fn parse_page<'a>(
 
             Some(Box::new(rows))
         }
+        BTreePage::InteriorIndex => {
+            let rows = cell_pointers
+                .into_iter()
+                .filter_map(move |cp| {
+                    let stream = &database[table_page_offset + cp as usize..];
+                    let left_child_id =
+                        u32::from_be_bytes([stream[0], stream[1], stream[2], stream[3]]);
+                    let (payload_size, offset) = parse_varint(&stream[4..]);
+                    /*
+                     *
+                     * There is some payload here but it only contains the key so we are just going
+                     * to ignore it
+                     */
+                    let record = parse_record(&stream[offset + 4..offset + 4 + payload_size], 2);
+                    let record = record.unwrap();
+
+                    Some(
+                        parse_page(
+                            database,
+                            db_header,
+                            column_map,
+                            db_header.page_size as usize * (left_child_id as usize - 1),
+                        )
+                        .unwrap()
+                        .chain(std::iter::once((record[1].read_usize(), record))),
+                    )
+
+                    //                    println!(
+                    //                        "left child id = {} payload size = {} offset = {} column count = {} country = {}",
+                    //                        left_child_id,
+                    //                        payload_size,
+                    //                        offset,
+                    //                        column_map.len(),country
+                    //                    );
+                    //
+                    // TODO(ishan): Read number of bytes of payload.
+                    // Read any over flow pages properly
+                    //parse_record(
+                    //    &stream[offset + 4..offset + payload_size + 4],
+                    //    column_map.len(),
+                    //)
+                    //.unwrap(),
+                })
+                .flatten();
+
+            if let Some(rp) = page_header.right_most_pointer {
+                Some(Box::new(
+                    rows.chain(
+                        parse_page(
+                            database,
+                            db_header,
+                            column_map,
+                            db_header.page_size as usize * (rp as usize - 1),
+                        )
+                        .unwrap(),
+                    ),
+                ))
+            } else {
+                Some(Box::new(rows))
+            }
+        }
+
+        BTreePage::LeafIndex => {
+            let rows = cell_pointers.into_iter().filter_map(move |cp| {
+                let stream = &database[table_page_offset + cp as usize..];
+                let (payload_size, offset) = parse_varint(&stream);
+                let record = parse_record(&stream[offset..offset + payload_size], 2);
+                let record = record.unwrap();
+
+                Some((record[1].read_usize(), record))
+            });
+
+            Some(Box::new(rows))
+        }
     }
 }
-
 fn read_columns(query: &str, db_header: DBHeader, database: &[u8]) -> Result<(), Error> {
     let (columns, table, where_clause) = read_column_and_table(query);
     // Assume it's valid SQL
@@ -218,7 +360,7 @@ fn read_columns(query: &str, db_header: DBHeader, database: &[u8]) -> Result<(),
         if let Some(wc) = where_clause {
             let colidx = *column_map.get(wc.0).unwrap();
 
-            let row_pol = row[colidx].read_string();
+            let row_pol = row[colidx].to_string();
 
             if row_pol != wc.1 {
                 continue;
