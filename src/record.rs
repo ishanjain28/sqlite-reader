@@ -2,6 +2,12 @@ use crate::varint::parse_varint;
 use anyhow::{bail, Result};
 use std::fmt::Display;
 
+#[derive(Debug, Eq, PartialEq, Hash, Copy, Clone)]
+pub struct RecordMeta {
+    pub column_count: usize,
+    pub offset: usize,
+}
+
 /// Reads SQLite's "Record Format" as mentioned here:
 /// [record_format](https://www.sqlite.org/fileformat.html#record_format)
 pub fn parse_record(stream: &[u8], column_count: usize) -> Result<Vec<ColumnValue>> {
@@ -28,7 +34,7 @@ pub fn parse_record(stream: &[u8], column_count: usize) -> Result<Vec<ColumnValu
     Ok(record)
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, PartialEq, Copy, Clone)]
 pub enum ColumnValue<'a> {
     Null,
     U8(u8),

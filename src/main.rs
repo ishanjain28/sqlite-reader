@@ -2,7 +2,7 @@ use anyhow::{bail, Error, Result};
 use once_cell::sync::Lazy;
 use regex::{Regex, RegexBuilder};
 use sqlite_starter_rust::header::BTreePage;
-use sqlite_starter_rust::record::ColumnValue;
+use sqlite_starter_rust::record::{ColumnValue, RecordMeta};
 use sqlite_starter_rust::{
     header::PageHeader, record::parse_record, schema::Schema, varint::parse_varint,
 };
@@ -156,12 +156,16 @@ fn read_index(database: &[u8], query: &str, db_header: &DBHeader) {
     let rowids: HashSet<usize> = rows
         .unwrap()
         .filter_map(|(rowid, row)| {
-            if row[0].to_string() == where_clause.unwrap().1 {
+            let record = parse_record(&database[row.offset..], 2);
+            let record = record.unwrap();
+
+            if record[0].to_string() == where_clause.unwrap().1 {
                 Some(rowid)
             } else {
                 None
             }
         })
+        .map(|rowid| rowid.read_usize())
         .collect();
 
     let rows = parse_page(
@@ -171,7 +175,7 @@ fn read_index(database: &[u8], query: &str, db_header: &DBHeader) {
         db_header.page_size as usize * (schema.root_page as usize - 1),
     )
     .unwrap()
-    .filter(|(rowid, _)| rowids.contains(rowid));
+    .filter(|(rowid, _)| rowids.contains(&rowid.read_usize()));
 
     for (rowid, row) in rows {
         let mut output = String::new();
@@ -181,7 +185,10 @@ fn read_index(database: &[u8], query: &str, db_header: &DBHeader) {
                 output.push_str(&rowid.to_string());
             } else {
                 let cpos = *column_map.get(column).unwrap();
-                output.push_str(&row[cpos].to_string());
+                let record = parse_record(&database[row.offset..], row.column_count);
+                let record = record.unwrap();
+
+                output.push_str(&record[cpos].to_string());
             }
             output.push('|');
         }
@@ -197,7 +204,7 @@ fn parse_page<'a>(
     db_header: &'a DBHeader,
     column_map: &'a HashMap<&str, usize>,
     table_page_offset: usize,
-) -> Option<Box<dyn Iterator<Item = (usize, Vec<ColumnValue<'a>>)> + 'a>> {
+) -> Option<Box<dyn Iterator<Item = (ColumnValue<'a>, RecordMeta)> + 'a>> {
     let (read, page_header) =
         PageHeader::parse(&database[table_page_offset..table_page_offset + 12]).unwrap();
 
@@ -245,16 +252,15 @@ fn parse_page<'a>(
         BTreePage::LeafTable => {
             let rows = cell_pointers.into_iter().map(move |cp| {
                 let stream = &database[table_page_offset + cp as usize..];
-                let (total, offset) = parse_varint(stream);
+                let (_total, offset) = parse_varint(stream);
                 let (rowid, read_bytes) = parse_varint(&stream[offset..]);
 
                 (
-                    rowid,
-                    parse_record(
-                        &stream[offset + read_bytes..offset + read_bytes + total as usize],
-                        column_map.len(),
-                    )
-                    .unwrap(),
+                    ColumnValue::U64(rowid as u64),
+                    RecordMeta {
+                        column_count: column_map.len(),
+                        offset: offset + read_bytes + table_page_offset + cp as usize,
+                    },
                 )
             });
 
@@ -284,7 +290,13 @@ fn parse_page<'a>(
                             db_header.page_size as usize * (left_child_id as usize - 1),
                         )
                         .unwrap()
-                        .chain(std::iter::once((record[1].read_usize(), record))),
+                        .chain(std::iter::once((
+                            record[1],
+                            RecordMeta {
+                                column_count: 2,
+                                offset: offset + 4 + table_page_offset + cp as usize,
+                            },
+                        ))),
                     )
 
                     //                    println!(
@@ -329,7 +341,13 @@ fn parse_page<'a>(
                 let record = parse_record(&stream[offset..offset + payload_size], 2);
                 let record = record.unwrap();
 
-                Some((record[1].read_usize(), record))
+                Some((
+                    record[1],
+                    RecordMeta {
+                        column_count: 2,
+                        offset: offset + table_page_offset + cp as usize,
+                    },
+                ))
             });
 
             Some(Box::new(rows))
@@ -359,8 +377,10 @@ fn read_columns(query: &str, db_header: DBHeader, database: &[u8]) -> Result<(),
 
         if let Some(wc) = where_clause {
             let colidx = *column_map.get(wc.0).unwrap();
+            let record = parse_record(&database[row.offset..], row.column_count);
+            let record = record.unwrap();
 
-            let row_pol = row[colidx].to_string();
+            let row_pol = record[colidx].to_string();
 
             if row_pol != wc.1 {
                 continue;
@@ -372,7 +392,10 @@ fn read_columns(query: &str, db_header: DBHeader, database: &[u8]) -> Result<(),
                 output.push_str(&rowid.to_string());
             } else {
                 let cpos = *column_map.get(column).unwrap();
-                output.push_str(&row[cpos].to_string());
+                let record = parse_record(&database[row.offset..], row.column_count);
+                let record = record.unwrap();
+
+                output.push_str(&record[cpos].to_string());
             }
             output.push('|');
         }
